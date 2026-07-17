@@ -1,0 +1,50 @@
+[
+  {
+    "id": "marcus-reed",
+    "name": "Marcus Reed",
+    "title": "Founder & Master Barber",
+    "bio": "20+ years behind the chair. Marcus trained in London and NYC before opening Elite Cuts. Specialist in classic tapers and straight-razor shaves.",
+    "specialty": "Classic Cuts & Shaves",
+    "avatar": "https://i.pravatar.cc/300?img=13",
+    "rating": 5.0,
+    "workDays": [1, 2, 3, 4, 5, 6],
+    "startHour": 9,
+    "endHour": 19
+  },
+  {
+    "id": "diego-alvarez",
+    "name": "Diego Alvarez",
+    "title": "Senior Barber",
+    "bio": "Diego is our fade specialist — precision skin fades and sharp line-ups are his signature. Award-winning at three regional barber competitions.",
+    "specialty": "Skin Fades & Designs",
+    "avatar": "https://i.pravatar.cc/300?img=12",
+    "rating": 4.9,
+    "workDays": [1, 2, 3, 4, 5, 6],
+    "startHour": 10,
+    "endHour": 20
+  },
+  {
+    "id": "james-okafor",
+    "name": "James Okafor",
+    "title": "Barber & Colorist",
+    "bio": "James blends modern color technique with traditional barbering, known for natural grey-blending and creative color work.",
+    "specialty": "Color & Modern Styles",
+    "avatar": "https://i.pravatar.cc/300?img=14",
+    "rating": 4.8,
+    "workDays": [2, 3, 4, 5, 6, 0],
+    "startHour": 9,
+    "endHour": 18
+  },
+  {
+    "id": "leo-fontaine",
+    "name": "Leo Fontaine",
+    "title": "Barber",
+    "bio": "Leo brings French-trained precision and a calm chairside manner, loved by clients for beard sculpting and kids' cuts alike.",
+    "specialty": "Beard Sculpting & Kids Cuts",
+    "avatar": "https://i.pravatar.cc/300?img=15",
+    "rating": 4.9,
+    "workDays": [1, 2, 3, 4, 5],
+    "startHour": 9,
+    "endHour": 17
+  }
+]

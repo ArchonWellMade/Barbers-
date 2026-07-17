@@ -1,0 +1,11 @@
+node_modules/
+.env
+
+# runtime data containing customer PII
+data/bookings.json
+data/contacts.json
+data/newsletter.json
+data/giftcards.json
+data/reviews.json
+.claude/
+.playwright-mcp/

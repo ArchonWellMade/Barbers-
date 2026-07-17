@@ -1,0 +1,66 @@
+[
+  {
+    "id": "classic-haircut",
+    "name": "Classic Haircut",
+    "description": "Precision scissor and clipper cut, tailored to your style, finished with a hot towel neck shave.",
+    "price": 35,
+    "duration": 30,
+    "category": "Hair"
+  },
+  {
+    "id": "skin-fade",
+    "name": "Signature Skin Fade",
+    "description": "Razor-sharp fade blended seamlessly into your chosen style, finished with line-up detailing.",
+    "price": 45,
+    "duration": 45,
+    "category": "Hair"
+  },
+  {
+    "id": "beard-trim",
+    "name": "Beard Sculpt & Trim",
+    "description": "Shape, trim and define your beard with straight razor edging and beard oil finish.",
+    "price": 25,
+    "duration": 30,
+    "category": "Beard"
+  },
+  {
+    "id": "hot-towel-shave",
+    "name": "Traditional Hot Towel Shave",
+    "description": "A relaxing straight-razor shave with hot towel steaming, pre-shave oil and soothing balm.",
+    "price": 40,
+    "duration": 45,
+    "category": "Shave"
+  },
+  {
+    "id": "the-full-package",
+    "name": "The Full Package",
+    "description": "Haircut, beard sculpt, and hot towel shave combined — our most popular premium experience.",
+    "price": 85,
+    "duration": 90,
+    "category": "Combo"
+  },
+  {
+    "id": "kids-cut",
+    "name": "Junior Cut (Under 12)",
+    "description": "A patient, friendly cut for our youngest clients in a comfortable, fun environment.",
+    "price": 20,
+    "duration": 30,
+    "category": "Hair"
+  },
+  {
+    "id": "hair-color",
+    "name": "Grey Blending & Color",
+    "description": "Subtle grey blending or full color service using premium ammonia-free products.",
+    "price": 55,
+    "duration": 60,
+    "category": "Color"
+  },
+  {
+    "id": "vip-executive",
+    "name": "VIP Executive Package",
+    "description": "Haircut, shave, facial cleanse, scalp massage and styling — the ultimate grooming experience.",
+    "price": 120,
+    "duration": 120,
+    "category": "Combo"
+  }
+]

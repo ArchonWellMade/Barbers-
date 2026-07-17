@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Admin Dashboard — Elite Cuts</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💈</text></svg>" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css" />
+<link rel="stylesheet" href="css/admin.css" />
+</head>
+<body class="admin-body">
+
+<!-- LOGIN SCREEN -->
+<div id="loginScreen" class="admin-login-wrap">
+  <form id="loginForm" class="admin-login-card">
+    <div class="admin-login-brand">
+      <span class="brand-mark">✂</span>
+      <span class="brand-text">ELITE <em>CUTS</em></span>
+    </div>
+    <h2>Admin Dashboard</h2>
+    <p class="admin-login-sub">Sign in to manage bookings</p>
+    <div class="form-row">
+      <label>Username<input type="text" id="loginUser" required autocomplete="username" /></label>
+    </div>
+    <div class="form-row">
+      <label>Password<input type="password" id="loginPass" required autocomplete="current-password" /></label>
+    </div>
+    <button type="submit" class="btn btn-primary btn-full">Sign In</button>
+    <p class="form-status" id="loginStatus"></p>
+    <a href="/" class="admin-back-link">&larr; Back to website</a>
+  </form>
+</div>
+
+<!-- DASHBOARD -->
+<div id="dashboard" class="admin-dashboard hidden">
+  <header class="admin-header">
+    <div class="admin-header-brand">
+      <span class="brand-mark">✂</span>
+      <span class="brand-text">ELITE <em>CUTS</em></span>
+      <span class="admin-tag">Admin</span>
+    </div>
+    <div class="admin-header-actions">
+      <a href="/" class="btn btn-ghost">View Site</a>
+      <button class="btn btn-outline" id="logoutBtn">Log Out</button>
+    </div>
+  </header>
+
+  <main class="admin-main">
+    <div class="admin-stats" id="adminStats"></div>
+
+    <div class="admin-panel">
+      <div class="admin-panel-head">
+        <h3>Bookings</h3>
+        <div class="admin-filters">
+          <input type="text" id="searchInput" placeholder="Search name, email, phone…" />
+          <select id="statusFilter">
+            <option value="all">All Statuses</option>
+            <option value="confirmed">Confirmed</option>
+            <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
+            <option value="no-show">No-Show</option>
+          </select>
+          <input type="date" id="dateFilter" />
+          <button class="btn btn-ghost" id="clearFilters">Clear</button>
+          <button class="btn btn-outline" id="refreshBtn">Refresh</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Client</th>
+              <th>Service</th>
+              <th>Barber</th>
+              <th>Date &amp; Time</th>
+              <th>Price</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="bookingsBody"></tbody>
+        </table>
+        <p class="hint" id="emptyState" style="display:none;">No bookings match your filters.</p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script src="js/admin.js"></script>
+</body>
+</html>
