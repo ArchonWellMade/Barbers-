@@ -3,49 +3,21 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
-const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { createClient } = require('@supabase/supabase-js');
 
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
 const ADMIN_PASS = process.env.ADMIN_PASS || 'admin';
 
-const DATA_DIR = path.join(__dirname, 'data');
-const SERVICES_FILE = path.join(DATA_DIR, 'services.json');
-const BARBERS_FILE = path.join(DATA_DIR, 'barbers.json');
-const BOOKINGS_FILE = path.join(DATA_DIR, 'bookings.json');
-const CONTACTS_FILE = path.join(DATA_DIR, 'contacts.json');
-const NEWSLETTER_FILE = path.join(DATA_DIR, 'newsletter.json');
-const REVIEWS_FILE = path.join(DATA_DIR, 'reviews.json');
-const GIFTCARDS_FILE = path.join(DATA_DIR, 'giftcards.json');
-
-// ---------- tiny JSON "database" helpers with a write queue (avoids concurrent corruption) ----------
-function ensureFile(file, initial) {
-  if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, JSON.stringify(initial, null, 2));
-  }
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables are required');
 }
-ensureFile(BOOKINGS_FILE, []);
-ensureFile(CONTACTS_FILE, []);
-ensureFile(NEWSLETTER_FILE, []);
-ensureFile(REVIEWS_FILE, []);
-ensureFile(GIFTCARDS_FILE, []);
-
-function readJSON(file) {
-  return JSON.parse(fs.readFileSync(file, 'utf-8'));
-}
-
-const writeQueues = new Map();
-function writeJSON(file, data) {
-  const prev = writeQueues.get(file) || Promise.resolve();
-  const next = prev
-    .catch(() => {})
-    .then(() => fs.promises.writeFile(file, JSON.stringify(data, null, 2)));
-  writeQueues.set(file, next);
-  return next;
-}
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});
 
 // ---------- app setup ----------
 const app = express();
@@ -62,7 +34,6 @@ app.get('/admin/', (req, res) => {
 
 // ---------- business rules ----------
 const SLOT_MINUTES = 30;
-const CLOSED_DAYS = []; // none globally closed; per-barber workDays controls availability
 
 function toMinutes(hhmm) {
   const [h, m] = hhmm.split(':').map(Number);
@@ -73,22 +44,115 @@ function toHHMM(mins) {
   const m = (mins % 60).toString().padStart(2, '0');
   return `${h}:${m}`;
 }
-
-function getBarber(barberId) {
-  return readJSON(BARBERS_FILE).find((b) => b.id === barberId);
-}
-function getService(serviceId) {
-  return readJSON(SERVICES_FILE).find((s) => s.id === serviceId);
-}
-
 function isPastDateTime(dateStr, timeStr) {
   const dt = new Date(`${dateStr}T${timeStr}:00`);
   return dt.getTime() < Date.now();
 }
+// escape LIKE/ILIKE wildcards so a filter behaves as an exact, case-insensitive match
+function escapeLike(str) {
+  return str.replace(/[%_\\]/g, '\\$&');
+}
 
-function computeAvailableSlots({ barberId, date, serviceId, excludeBookingId }) {
-  const barber = getBarber(barberId);
-  const service = getService(serviceId);
+// ---------- row <-> API shape mappers ----------
+function rowToBarber(r) {
+  return {
+    id: r.id,
+    name: r.name,
+    title: r.title,
+    bio: r.bio,
+    specialty: r.specialty,
+    avatar: r.avatar,
+    rating: Number(r.rating),
+    workDays: r.work_days,
+    startHour: r.start_hour,
+    endHour: r.end_hour,
+  };
+}
+function rowToService(r) {
+  return {
+    id: r.id,
+    name: r.name,
+    description: r.description,
+    price: Number(r.price),
+    duration: r.duration,
+    category: r.category,
+  };
+}
+function rowToBooking(r) {
+  return {
+    id: r.id,
+    serviceId: r.service_id,
+    serviceName: r.service_name,
+    basePrice: Number(r.base_price),
+    loyaltyDiscount: Number(r.loyalty_discount),
+    loyaltyTier: r.loyalty_tier,
+    giftCardCode: r.gift_card_code,
+    giftCardDiscount: Number(r.gift_card_discount),
+    price: Number(r.price),
+    duration: r.duration,
+    barberId: r.barber_id,
+    barberName: r.barber_name,
+    date: r.date,
+    time: r.time,
+    name: r.name,
+    email: r.email,
+    phone: r.phone,
+    notes: r.notes,
+    status: r.status,
+    createdAt: r.created_at,
+    rescheduledAt: r.rescheduled_at || undefined,
+  };
+}
+function rowToGiftCard(r) {
+  return {
+    code: r.code,
+    initialAmount: Number(r.initial_amount),
+    balance: Number(r.balance),
+    senderName: r.sender_name,
+    senderEmail: r.sender_email,
+    recipientName: r.recipient_name,
+    recipientEmail: r.recipient_email,
+    message: r.message,
+    redemptions: r.redemptions,
+    createdAt: r.created_at,
+  };
+}
+function rowToReview(r) {
+  return {
+    id: r.id,
+    name: r.name,
+    email: r.email,
+    rating: r.rating,
+    text: r.text,
+    serviceId: r.service_id,
+    status: r.status,
+    createdAt: r.created_at,
+  };
+}
+function rowToContact(r) {
+  return { id: r.id, name: r.name, email: r.email, message: r.message, createdAt: r.created_at };
+}
+
+async function getBarber(barberId) {
+  const { data, error } = await supabase.from('barber_barbers').select('*').eq('id', barberId).maybeSingle();
+  if (error) throw error;
+  return data ? rowToBarber(data) : null;
+}
+async function getService(serviceId) {
+  const { data, error } = await supabase.from('barber_services').select('*').eq('id', serviceId).maybeSingle();
+  if (error) throw error;
+  return data ? rowToService(data) : null;
+}
+async function getGiftCard(code) {
+  if (!code) return null;
+  const normalized = String(code).trim().toUpperCase();
+  const { data, error } = await supabase.from('barber_giftcards').select('*').eq('code', normalized).maybeSingle();
+  if (error) throw error;
+  return data ? rowToGiftCard(data) : null;
+}
+
+async function computeAvailableSlots({ barberId, date, serviceId, excludeBookingId }) {
+  const [barber, service] = await Promise.all([getBarber(barberId), getService(serviceId)]);
   if (!barber || !service) return { error: 'Invalid barber or service', slots: [] };
 
   const dateObj = new Date(`${date}T00:00:00`);
@@ -101,14 +165,19 @@ function computeAvailableSlots({ barberId, date, serviceId, excludeBookingId }) 
   const endMin = barber.endHour * 60;
   const duration = service.duration;
 
-  const bookings = readJSON(BOOKINGS_FILE).filter(
-    (b) => b.barberId === barberId && b.date === date && b.status !== 'cancelled' && b.id !== excludeBookingId
-  );
+  let query = supabase
+    .from('barber_bookings')
+    .select('time, duration')
+    .eq('barber_id', barberId)
+    .eq('date', date)
+    .neq('status', 'cancelled');
+  if (excludeBookingId) query = query.neq('id', excludeBookingId);
+  const { data: busyRows, error } = await query;
+  if (error) throw error;
 
-  const busyRanges = bookings.map((b) => {
+  const busyRanges = busyRows.map((b) => {
     const bStart = toMinutes(b.time);
-    const bDuration = getService(b.serviceId)?.duration || 30;
-    return [bStart, bStart + bDuration];
+    return [bStart, bStart + b.duration];
   });
 
   const slots = [];
@@ -132,12 +201,25 @@ const LOYALTY_TIERS = [
   { name: 'Platinum', minVisits: 10, discountPercent: 20 },
 ];
 
-function computeLoyalty(email) {
-  if (!email) return { email: null, visits: 0, tier: LOYALTY_TIERS[0].name, discountPercent: 0, nextTier: LOYALTY_TIERS[1], visitsToNextTier: LOYALTY_TIERS[1].minVisits };
+async function computeLoyalty(email) {
+  if (!email) {
+    return {
+      email: null,
+      visits: 0,
+      tier: LOYALTY_TIERS[0].name,
+      discountPercent: 0,
+      nextTier: LOYALTY_TIERS[1],
+      visitsToNextTier: LOYALTY_TIERS[1].minVisits,
+    };
+  }
   const normalized = String(email).toLowerCase();
-  const visits = readJSON(BOOKINGS_FILE).filter(
-    (b) => b.email.toLowerCase() === normalized && b.status !== 'cancelled'
-  ).length;
+  const { count, error } = await supabase
+    .from('barber_bookings')
+    .select('id', { count: 'exact', head: true })
+    .ilike('email', escapeLike(normalized))
+    .neq('status', 'cancelled');
+  if (error) throw error;
+  const visits = count || 0;
 
   let tier = LOYALTY_TIERS[0];
   for (const t of LOYALTY_TIERS) {
@@ -157,15 +239,15 @@ function computeLoyalty(email) {
 }
 
 // ---------- gift cards ----------
-function generateGiftCardCode() {
+async function generateUniqueGiftCardCode() {
   const part = () => crypto.randomBytes(2).toString('hex').toUpperCase();
-  return `EC-${part()}-${part()}`;
-}
-
-function getGiftCard(code) {
-  if (!code) return null;
-  const normalized = String(code).trim().toUpperCase();
-  return readJSON(GIFTCARDS_FILE).find((g) => g.code === normalized) || null;
+  for (let i = 0; i < 20; i++) {
+    const code = `EC-${part()}-${part()}`;
+    const { data, error } = await supabase.from('barber_giftcards').select('code').eq('code', code).maybeSingle();
+    if (error) throw error;
+    if (!data) return code;
+  }
+  throw new Error('Could not generate a unique gift card code');
 }
 
 // ---------- auth middleware ----------
@@ -185,15 +267,19 @@ function requireAdmin(req, res, next) {
 // PUBLIC API
 // =====================================================================
 
-app.get('/api/services', (req, res) => {
-  res.json(readJSON(SERVICES_FILE));
+app.get('/api/services', async (req, res) => {
+  const { data, error } = await supabase.from('barber_services').select('*').order('sort_order');
+  if (error) return res.status(500).json({ error: 'Failed to load services' });
+  res.json(data.map(rowToService));
 });
 
-app.get('/api/barbers', (req, res) => {
-  res.json(readJSON(BARBERS_FILE));
+app.get('/api/barbers', async (req, res) => {
+  const { data, error } = await supabase.from('barber_barbers').select('*').order('sort_order');
+  if (error) return res.status(500).json({ error: 'Failed to load barbers' });
+  res.json(data.map(rowToBarber));
 });
 
-app.get('/api/availability', (req, res) => {
+app.get('/api/availability', async (req, res) => {
   const { barberId, date, serviceId } = req.query;
   if (!barberId || !date || !serviceId) {
     return res.status(400).json({ error: 'barberId, date and serviceId are required' });
@@ -201,19 +287,19 @@ app.get('/api/availability', (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return res.status(400).json({ error: 'Invalid date format, expected YYYY-MM-DD' });
   }
-  const { error, slots } = computeAvailableSlots({ barberId, date, serviceId });
+  const { error, slots } = await computeAvailableSlots({ barberId, date, serviceId });
   if (error) return res.status(400).json({ error });
   res.json({ date, barberId, serviceId, slots });
 });
 
-app.get('/api/loyalty', (req, res) => {
+app.get('/api/loyalty', async (req, res) => {
   const { email } = req.query;
   if (!email) return res.status(400).json({ error: 'email is required' });
-  res.json(computeLoyalty(email));
+  res.json(await computeLoyalty(email));
 });
 
-app.get('/api/gift-cards/:code', (req, res) => {
-  const card = getGiftCard(req.params.code);
+app.get('/api/gift-cards/:code', async (req, res) => {
+  const card = await getGiftCard(req.params.code);
   if (!card) return res.status(404).json({ error: 'Gift card not found' });
   res.json({ code: card.code, balance: card.balance, initialAmount: card.initialAmount, active: card.balance > 0 });
 });
@@ -232,38 +318,36 @@ app.post('/api/gift-cards', async (req, res) => {
     return res.status(400).json({ error: 'Invalid sender email' });
   }
 
-  const cards = readJSON(GIFTCARDS_FILE);
-  let code = generateGiftCardCode();
-  while (cards.some((c) => c.code === code)) code = generateGiftCardCode();
-
-  const card = {
-    code,
-    initialAmount: amt,
-    balance: amt,
-    senderName: String(senderName).trim(),
-    senderEmail: String(senderEmail).trim(),
-    recipientName: String(recipientName).trim(),
-    recipientEmail: recipientEmail ? String(recipientEmail).trim() : '',
-    message: message ? String(message).trim().slice(0, 300) : '',
-    redemptions: [],
-    createdAt: new Date().toISOString(),
-  };
-  cards.push(card);
-  await writeJSON(GIFTCARDS_FILE, cards);
-  res.status(201).json({ giftCard: card });
+  const code = await generateUniqueGiftCardCode();
+  const { data, error } = await supabase
+    .from('barber_giftcards')
+    .insert({
+      code,
+      initial_amount: amt,
+      balance: amt,
+      sender_name: String(senderName).trim(),
+      sender_email: String(senderEmail).trim(),
+      recipient_name: String(recipientName).trim(),
+      recipient_email: recipientEmail ? String(recipientEmail).trim() : '',
+      message: message ? String(message).trim().slice(0, 300) : '',
+      redemptions: [],
+    })
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: 'Failed to create gift card' });
+  res.status(201).json({ giftCard: rowToGiftCard(data) });
 });
 
-app.get('/api/stats/public', (req, res) => {
-  const bookings = readJSON(BOOKINGS_FILE);
+app.get('/api/stats/public', async (req, res) => {
   const today = new Date().toISOString().slice(0, 10);
-  const bookedToday = bookings.filter((b) => b.date === today && b.status !== 'cancelled').length;
-  const bookedThisWeek = bookings.filter((b) => {
-    if (b.status === 'cancelled') return false;
-    const d = new Date(`${b.createdAt}`);
-    const diffDays = (Date.now() - d.getTime()) / 86400000;
-    return diffDays <= 7;
-  }).length;
-  res.json({ bookedToday, bookedThisWeek });
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+
+  const [todayResult, weekResult] = await Promise.all([
+    supabase.from('barber_bookings').select('id', { count: 'exact', head: true }).eq('date', today).neq('status', 'cancelled'),
+    supabase.from('barber_bookings').select('id', { count: 'exact', head: true }).gte('created_at', weekAgo).neq('status', 'cancelled'),
+  ]);
+  if (todayResult.error || weekResult.error) return res.status(500).json({ error: 'Failed to load stats' });
+  res.json({ bookedToday: todayResult.count || 0, bookedThisWeek: weekResult.count || 0 });
 });
 
 app.post('/api/bookings', async (req, res) => {
@@ -276,82 +360,73 @@ app.post('/api/bookings', async (req, res) => {
   if (!emailRe.test(email)) {
     return res.status(400).json({ error: 'Invalid email address' });
   }
-  const service = getService(serviceId);
-  const barber = getBarber(barberId);
+  const [service, barber] = await Promise.all([getService(serviceId), getBarber(barberId)]);
   if (!service) return res.status(400).json({ error: 'Unknown service' });
   if (!barber) return res.status(400).json({ error: 'Unknown barber' });
   if (isPastDateTime(date, time)) {
     return res.status(400).json({ error: 'Cannot book a time in the past' });
   }
 
-  // re-validate slot is still free (race-condition guard)
-  const { slots } = computeAvailableSlots({ barberId, date, serviceId });
+  // check slot is free (final guarantee against double-booking is the DB exclusion constraint below)
+  const { slots } = await computeAvailableSlots({ barberId, date, serviceId });
   if (!slots.includes(time)) {
     return res.status(409).json({ error: 'That time slot is no longer available. Please pick another.' });
   }
 
-  // gift card validation (balance is deducted only after the booking is safely persisted)
   let giftCard = null;
   if (giftCardCode) {
-    giftCard = getGiftCard(giftCardCode);
+    giftCard = await getGiftCard(giftCardCode);
     if (!giftCard) return res.status(400).json({ error: 'Gift card not found' });
     if (giftCard.balance <= 0) return res.status(400).json({ error: 'Gift card has no remaining balance' });
   }
 
-  const loyalty = computeLoyalty(email);
+  const loyalty = await computeLoyalty(email);
   const basePrice = service.price;
   const loyaltyDiscount = Math.round(basePrice * (loyalty.discountPercent / 100) * 100) / 100;
   const priceAfterLoyalty = Math.round((basePrice - loyaltyDiscount) * 100) / 100;
   const giftCardDiscount = giftCard ? Math.min(giftCard.balance, priceAfterLoyalty) : 0;
   const finalPrice = Math.round((priceAfterLoyalty - giftCardDiscount) * 100) / 100;
 
-  const booking = {
-    id: crypto.randomUUID(),
-    serviceId,
-    serviceName: service.name,
-    basePrice,
-    loyaltyDiscount,
-    loyaltyTier: loyalty.tier,
-    giftCardCode: giftCard ? giftCard.code : null,
-    giftCardDiscount,
-    price: finalPrice,
-    duration: service.duration,
-    barberId,
-    barberName: barber.name,
-    date,
-    time,
-    name: String(name).trim(),
-    email: String(email).trim(),
-    phone: String(phone).trim(),
-    notes: notes ? String(notes).trim().slice(0, 500) : '',
-    status: 'confirmed',
-    createdAt: new Date().toISOString(),
-  };
+  const { data: bookingRow, error: insertError } = await supabase
+    .from('barber_bookings')
+    .insert({
+      service_id: serviceId,
+      service_name: service.name,
+      base_price: basePrice,
+      loyalty_discount: loyaltyDiscount,
+      loyalty_tier: loyalty.tier,
+      gift_card_code: giftCard ? giftCard.code : null,
+      gift_card_discount: giftCardDiscount,
+      price: finalPrice,
+      duration: service.duration,
+      barber_id: barberId,
+      barber_name: barber.name,
+      date,
+      time,
+      name: String(name).trim(),
+      email: String(email).trim(),
+      phone: String(phone).trim(),
+      notes: notes ? String(notes).trim().slice(0, 500) : '',
+      status: 'confirmed',
+    })
+    .select()
+    .single();
 
-  const bookings = readJSON(BOOKINGS_FILE);
-  // final overlap safety-check right before write
-  const conflict = bookings.some((b) => {
-    if (b.barberId !== barberId || b.date !== date || b.status === 'cancelled') return false;
-    const bStart = toMinutes(b.time);
-    const bEnd = bStart + b.duration;
-    const nStart = toMinutes(time);
-    const nEnd = nStart + service.duration;
-    return nStart < bEnd && nEnd > bStart;
-  });
-  if (conflict) {
-    return res.status(409).json({ error: 'That time slot was just booked. Please pick another.' });
+  if (insertError) {
+    // 23P01 = exclusion constraint violation, i.e. someone else just booked this slot
+    if (insertError.code === '23P01') {
+      return res.status(409).json({ error: 'That time slot was just booked. Please pick another.' });
+    }
+    return res.status(500).json({ error: 'Failed to create booking' });
   }
-
-  bookings.push(booking);
-  await writeJSON(BOOKINGS_FILE, bookings);
+  const booking = rowToBooking(bookingRow);
 
   if (giftCard && giftCardDiscount > 0) {
-    const cards = readJSON(GIFTCARDS_FILE);
-    const cardRecord = cards.find((c) => c.code === giftCard.code);
-    if (cardRecord) {
-      cardRecord.balance = Math.round((cardRecord.balance - giftCardDiscount) * 100) / 100;
-      cardRecord.redemptions.push({ bookingId: booking.id, amount: giftCardDiscount, date: new Date().toISOString() });
-      await writeJSON(GIFTCARDS_FILE, cards);
+    const freshCard = await getGiftCard(giftCard.code);
+    if (freshCard) {
+      const newBalance = Math.round((freshCard.balance - giftCardDiscount) * 100) / 100;
+      const redemptions = [...freshCard.redemptions, { bookingId: booking.id, amount: giftCardDiscount, date: new Date().toISOString() }];
+      await supabase.from('barber_giftcards').update({ balance: newBalance, redemptions }).eq('code', freshCard.code);
     }
   }
 
@@ -359,10 +434,12 @@ app.post('/api/bookings', async (req, res) => {
 });
 
 // lookup a booking (for "manage my booking" by id + email)
-app.get('/api/bookings/:id', (req, res) => {
+app.get('/api/bookings/:id', async (req, res) => {
   const { email } = req.query;
-  const booking = readJSON(BOOKINGS_FILE).find((b) => b.id === req.params.id);
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+  const { data, error } = await supabase.from('barber_bookings').select('*').eq('id', req.params.id).maybeSingle();
+  if (error) return res.status(500).json({ error: 'Failed to load booking' });
+  if (!data) return res.status(404).json({ error: 'Booking not found' });
+  const booking = rowToBooking(data);
   if (email && booking.email.toLowerCase() !== String(email).toLowerCase()) {
     return res.status(403).json({ error: 'Email does not match booking' });
   }
@@ -371,15 +448,21 @@ app.get('/api/bookings/:id', (req, res) => {
 
 app.post('/api/bookings/:id/cancel', async (req, res) => {
   const { email } = req.body || {};
-  const bookings = readJSON(BOOKINGS_FILE);
-  const booking = bookings.find((b) => b.id === req.params.id);
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+  const { data, error } = await supabase.from('barber_bookings').select('*').eq('id', req.params.id).maybeSingle();
+  if (error) return res.status(500).json({ error: 'Failed to load booking' });
+  if (!data) return res.status(404).json({ error: 'Booking not found' });
+  const booking = rowToBooking(data);
   if (!email || booking.email.toLowerCase() !== String(email).toLowerCase()) {
     return res.status(403).json({ error: 'Email does not match booking' });
   }
-  booking.status = 'cancelled';
-  await writeJSON(BOOKINGS_FILE, bookings);
-  res.json({ booking });
+  const { data: updated, error: updateError } = await supabase
+    .from('barber_bookings')
+    .update({ status: 'cancelled' })
+    .eq('id', req.params.id)
+    .select()
+    .single();
+  if (updateError) return res.status(500).json({ error: 'Failed to cancel booking' });
+  res.json({ booking: rowToBooking(updated) });
 });
 
 app.post('/api/bookings/:id/reschedule', async (req, res) => {
@@ -387,9 +470,10 @@ app.post('/api/bookings/:id/reschedule', async (req, res) => {
   if (!email || !date || !time) {
     return res.status(400).json({ error: 'email, date and time are required' });
   }
-  const bookings = readJSON(BOOKINGS_FILE);
-  const booking = bookings.find((b) => b.id === req.params.id);
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+  const { data, error } = await supabase.from('barber_bookings').select('*').eq('id', req.params.id).maybeSingle();
+  if (error) return res.status(500).json({ error: 'Failed to load booking' });
+  if (!data) return res.status(404).json({ error: 'Booking not found' });
+  const booking = rowToBooking(data);
   if (booking.email.toLowerCase() !== String(email).toLowerCase()) {
     return res.status(403).json({ error: 'Email does not match booking' });
   }
@@ -400,22 +484,30 @@ app.post('/api/bookings/:id/reschedule', async (req, res) => {
     return res.status(400).json({ error: 'Cannot reschedule to a time in the past' });
   }
 
-  const { error, slots } = computeAvailableSlots({
+  const { error: slotsError, slots } = await computeAvailableSlots({
     barberId: booking.barberId,
     date,
     serviceId: booking.serviceId,
     excludeBookingId: booking.id,
   });
-  if (error) return res.status(400).json({ error });
+  if (slotsError) return res.status(400).json({ error: slotsError });
   if (!slots.includes(time)) {
     return res.status(409).json({ error: 'That time slot is not available. Please pick another.' });
   }
 
-  booking.date = date;
-  booking.time = time;
-  booking.rescheduledAt = new Date().toISOString();
-  await writeJSON(BOOKINGS_FILE, bookings);
-  res.json({ booking });
+  const { data: updated, error: updateError } = await supabase
+    .from('barber_bookings')
+    .update({ date, time, rescheduled_at: new Date().toISOString() })
+    .eq('id', req.params.id)
+    .select()
+    .single();
+  if (updateError) {
+    if (updateError.code === '23P01') {
+      return res.status(409).json({ error: 'That time slot was just booked. Please pick another.' });
+    }
+    return res.status(500).json({ error: 'Failed to reschedule booking' });
+  }
+  res.json({ booking: rowToBooking(updated) });
 });
 
 app.post('/api/contact', async (req, res) => {
@@ -423,15 +515,12 @@ app.post('/api/contact', async (req, res) => {
   if (!name || !email || !message) {
     return res.status(400).json({ error: 'Name, email and message are required' });
   }
-  const contacts = readJSON(CONTACTS_FILE);
-  contacts.push({
-    id: crypto.randomUUID(),
+  const { error } = await supabase.from('barber_contacts').insert({
     name: String(name).trim(),
     email: String(email).trim(),
     message: String(message).trim().slice(0, 2000),
-    createdAt: new Date().toISOString(),
   });
-  await writeJSON(CONTACTS_FILE, contacts);
+  if (error) return res.status(500).json({ error: 'Failed to submit message' });
   res.status(201).json({ ok: true });
 });
 
@@ -441,20 +530,22 @@ app.post('/api/newsletter', async (req, res) => {
   if (!email || !emailRe.test(email)) {
     return res.status(400).json({ error: 'Valid email required' });
   }
-  const list = readJSON(NEWSLETTER_FILE);
-  if (!list.some((e) => e.email.toLowerCase() === email.toLowerCase())) {
-    list.push({ email: String(email).trim(), createdAt: new Date().toISOString() });
-    await writeJSON(NEWSLETTER_FILE, list);
-  }
+  const { error } = await supabase.from('barber_newsletter').upsert(
+    { email: String(email).trim() },
+    { onConflict: 'email', ignoreDuplicates: true }
+  );
+  if (error) return res.status(500).json({ error: 'Failed to subscribe' });
   res.status(201).json({ ok: true });
 });
 
-app.get('/api/reviews', (req, res) => {
-  const reviews = readJSON(REVIEWS_FILE)
-    .filter((r) => r.status === 'approved')
-    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
-    .map(({ email, ...rest }) => rest);
-  res.json(reviews);
+app.get('/api/reviews', async (req, res) => {
+  const { data, error } = await supabase
+    .from('barber_reviews')
+    .select('*')
+    .eq('status', 'approved')
+    .order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: 'Failed to load reviews' });
+  res.json(data.map(rowToReview).map(({ email, ...rest }) => rest));
 });
 
 app.post('/api/reviews', async (req, res) => {
@@ -470,19 +561,20 @@ app.post('/api/reviews', async (req, res) => {
   if (r < 1 || r > 5) {
     return res.status(400).json({ error: 'Rating must be between 1 and 5' });
   }
-  const reviews = readJSON(REVIEWS_FILE);
-  const review = {
-    id: crypto.randomUUID(),
-    name: String(name).trim(),
-    email: String(email).trim(),
-    rating: Math.round(r),
-    text: String(text).trim().slice(0, 1000),
-    serviceId: serviceId || null,
-    status: 'pending',
-    createdAt: new Date().toISOString(),
-  };
-  reviews.push(review);
-  await writeJSON(REVIEWS_FILE, reviews);
+  const { data, error } = await supabase
+    .from('barber_reviews')
+    .insert({
+      name: String(name).trim(),
+      email: String(email).trim(),
+      rating: Math.round(r),
+      text: String(text).trim().slice(0, 1000),
+      service_id: serviceId || null,
+      status: 'pending',
+    })
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: 'Failed to submit review' });
+  const review = rowToReview(data);
   res.status(201).json({ review: { ...review, email: undefined } });
 });
 
@@ -499,55 +591,59 @@ app.post('/api/admin/login', (req, res) => {
   res.status(401).json({ error: 'Invalid credentials' });
 });
 
-app.get('/api/admin/bookings', requireAdmin, (req, res) => {
-  const bookings = readJSON(BOOKINGS_FILE).sort((a, b) =>
-    `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)
-  );
-  res.json(bookings);
+app.get('/api/admin/bookings', requireAdmin, async (req, res) => {
+  const { data, error } = await supabase.from('barber_bookings').select('*').order('date').order('time');
+  if (error) return res.status(500).json({ error: 'Failed to load bookings' });
+  res.json(data.map(rowToBooking));
 });
 
 app.patch('/api/admin/bookings/:id', requireAdmin, async (req, res) => {
   const { status } = req.body || {};
   const allowed = ['confirmed', 'completed', 'cancelled', 'no-show'];
   if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid status' });
-  const bookings = readJSON(BOOKINGS_FILE);
-  const booking = bookings.find((b) => b.id === req.params.id);
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
-  booking.status = status;
-  await writeJSON(BOOKINGS_FILE, bookings);
-  res.json({ booking });
+  const { data, error } = await supabase
+    .from('barber_bookings')
+    .update({ status })
+    .eq('id', req.params.id)
+    .select()
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: 'Failed to update booking' });
+  if (!data) return res.status(404).json({ error: 'Booking not found' });
+  res.json({ booking: rowToBooking(data) });
 });
 
 app.delete('/api/admin/bookings/:id', requireAdmin, async (req, res) => {
-  const bookings = readJSON(BOOKINGS_FILE);
-  const idx = bookings.findIndex((b) => b.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Booking not found' });
-  const [removed] = bookings.splice(idx, 1);
-  await writeJSON(BOOKINGS_FILE, bookings);
-  res.json({ booking: removed });
+  const { data, error } = await supabase.from('barber_bookings').delete().eq('id', req.params.id).select().maybeSingle();
+  if (error) return res.status(500).json({ error: 'Failed to delete booking' });
+  if (!data) return res.status(404).json({ error: 'Booking not found' });
+  res.json({ booking: rowToBooking(data) });
 });
 
-app.get('/api/admin/stats', requireAdmin, (req, res) => {
-  const bookings = readJSON(BOOKINGS_FILE);
+app.get('/api/admin/stats', requireAdmin, async (req, res) => {
   const today = new Date().toISOString().slice(0, 10);
-  const revenue = bookings
-    .filter((b) => b.status !== 'cancelled')
-    .reduce((sum, b) => sum + (b.price || 0), 0);
+  const { data, error } = await supabase.from('barber_bookings').select('date, status, price');
+  if (error) return res.status(500).json({ error: 'Failed to load stats' });
+
+  const revenue = data.filter((b) => b.status !== 'cancelled').reduce((sum, b) => sum + (Number(b.price) || 0), 0);
   res.json({
-    total: bookings.length,
-    today: bookings.filter((b) => b.date === today && b.status !== 'cancelled').length,
-    upcoming: bookings.filter((b) => b.date >= today && b.status === 'confirmed').length,
-    cancelled: bookings.filter((b) => b.status === 'cancelled').length,
+    total: data.length,
+    today: data.filter((b) => b.date === today && b.status !== 'cancelled').length,
+    upcoming: data.filter((b) => b.date >= today && b.status === 'confirmed').length,
+    cancelled: data.filter((b) => b.status === 'cancelled').length,
     revenue,
   });
 });
 
-app.get('/api/admin/contacts', requireAdmin, (req, res) => {
-  res.json(readJSON(CONTACTS_FILE).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)));
+app.get('/api/admin/contacts', requireAdmin, async (req, res) => {
+  const { data, error } = await supabase.from('barber_contacts').select('*').order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: 'Failed to load contacts' });
+  res.json(data.map(rowToContact));
 });
 
-app.get('/api/admin/bookings/export', requireAdmin, (req, res) => {
-  const bookings = readJSON(BOOKINGS_FILE).sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
+app.get('/api/admin/bookings/export', requireAdmin, async (req, res) => {
+  const { data, error } = await supabase.from('barber_bookings').select('*').order('date').order('time');
+  if (error) return res.status(500).json({ error: 'Failed to load bookings' });
+  const bookings = data.map(rowToBooking);
   const headers = ['ID', 'Name', 'Email', 'Phone', 'Service', 'Barber', 'Date', 'Time', 'Price', 'Status', 'Created At'];
   const escapeCsv = (val) => `"${String(val ?? '').replace(/"/g, '""')}"`;
   const rows = bookings.map((b) => [
@@ -559,11 +655,20 @@ app.get('/api/admin/bookings/export', requireAdmin, (req, res) => {
   res.send(csv);
 });
 
-app.get('/api/admin/analytics', requireAdmin, (req, res) => {
-  const bookings = readJSON(BOOKINGS_FILE).filter((b) => b.status !== 'cancelled');
-  const services = readJSON(SERVICES_FILE);
-  const barbers = readJSON(BARBERS_FILE);
-  const reviews = readJSON(REVIEWS_FILE).filter((r) => r.status === 'approved');
+app.get('/api/admin/analytics', requireAdmin, async (req, res) => {
+  const [bookingsResult, servicesResult, barbersResult, reviewsResult] = await Promise.all([
+    supabase.from('barber_bookings').select('*').neq('status', 'cancelled'),
+    supabase.from('barber_services').select('*'),
+    supabase.from('barber_barbers').select('*'),
+    supabase.from('barber_reviews').select('*').eq('status', 'approved'),
+  ]);
+  if (bookingsResult.error || servicesResult.error || barbersResult.error || reviewsResult.error) {
+    return res.status(500).json({ error: 'Failed to load analytics' });
+  }
+  const bookings = bookingsResult.data.map(rowToBooking);
+  const services = servicesResult.data.map(rowToService);
+  const barbers = barbersResult.data.map(rowToBarber);
+  const reviews = reviewsResult.data.map(rowToReview);
 
   const serviceCounts = {};
   const barberCounts = {};
@@ -603,8 +708,10 @@ app.get('/api/admin/analytics', requireAdmin, (req, res) => {
   res.json({ popularServices, topBarbers, revenueByDay, totalReviews: reviews.length, avgRating });
 });
 
-app.get('/api/admin/reviews', requireAdmin, (req, res) => {
-  res.json(readJSON(REVIEWS_FILE).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)));
+app.get('/api/admin/reviews', requireAdmin, async (req, res) => {
+  const { data, error } = await supabase.from('barber_reviews').select('*').order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: 'Failed to load reviews' });
+  res.json(data.map(rowToReview));
 });
 
 app.patch('/api/admin/reviews/:id', requireAdmin, async (req, res) => {
@@ -612,32 +719,39 @@ app.patch('/api/admin/reviews/:id', requireAdmin, async (req, res) => {
   if (!['approved', 'rejected', 'pending'].includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
   }
-  const reviews = readJSON(REVIEWS_FILE);
-  const review = reviews.find((r) => r.id === req.params.id);
-  if (!review) return res.status(404).json({ error: 'Review not found' });
-  review.status = status;
-  await writeJSON(REVIEWS_FILE, reviews);
-  res.json({ review });
+  const { data, error } = await supabase
+    .from('barber_reviews')
+    .update({ status })
+    .eq('id', req.params.id)
+    .select()
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: 'Failed to update review' });
+  if (!data) return res.status(404).json({ error: 'Review not found' });
+  res.json({ review: rowToReview(data) });
 });
 
 app.delete('/api/admin/reviews/:id', requireAdmin, async (req, res) => {
-  const reviews = readJSON(REVIEWS_FILE);
-  const idx = reviews.findIndex((r) => r.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Review not found' });
-  const [removed] = reviews.splice(idx, 1);
-  await writeJSON(REVIEWS_FILE, reviews);
-  res.json({ review: removed });
+  const { data, error } = await supabase.from('barber_reviews').delete().eq('id', req.params.id).select().maybeSingle();
+  if (error) return res.status(500).json({ error: 'Failed to delete review' });
+  if (!data) return res.status(404).json({ error: 'Review not found' });
+  res.json({ review: rowToReview(data) });
 });
 
-app.get('/api/admin/gift-cards', requireAdmin, (req, res) => {
-  res.json(readJSON(GIFTCARDS_FILE).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)));
+app.get('/api/admin/gift-cards', requireAdmin, async (req, res) => {
+  const { data, error } = await supabase.from('barber_giftcards').select('*').order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: 'Failed to load gift cards' });
+  res.json(data.map(rowToGiftCard));
 });
 
 // health check
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
-app.listen(PORT, () => {
-  console.log(`\n  Elite Cuts Barber running → http://localhost:${PORT}`);
-  console.log(`  Admin dashboard         → http://localhost:${PORT}/admin.html`);
-  console.log(`  Admin login             → ${ADMIN_USER} / ${ADMIN_PASS}\n`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`\n  Elite Cuts Barber running → http://localhost:${PORT}`);
+    console.log(`  Admin dashboard         → http://localhost:${PORT}/admin.html`);
+    console.log(`  Admin login             → ${ADMIN_USER} / ${ADMIN_PASS}\n`);
+  });
+}
+
+module.exports = app;
